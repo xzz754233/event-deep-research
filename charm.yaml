@@ -1,0 +1,74 @@
+version: "0.4.1"  
+
+persona:
+  name: "Event Deep Research"
+  
+  version: "0.1.0"
+  
+  description: "Autonomous biographer that generates precise, fact-checked historical timelines from deep web research."
+  
+  full_description: |
+    # Your Autonomous Biographer
+    
+    Stop manually scouring dozens of Wiki pages. **Event Deep Research** is an intelligent agent that acts as a dedicated research team, turning scattered web information into a coherent life story.
+
+    ### What It Does
+    * **Deep Web Crawling:** Goes beyond surface summaries to find specific life events.
+    * **Smart Deduplication:** Merges conflicting sources to ensure accuracy.
+    * **Structured Output:** Delivers a clean JSON timeline with exact dates, locations, and descriptions.
+
+    ### How to Use
+    Simply enter the name of a historical figure (e.g., *"Albert Einstein"* or *"J. Robert Oppenheimer"*). The agent will autonomously plan, search, read, and structure the data for you.
+
+    ### Perfect For
+    * **Content Creators:** Researching for documentaries or video scripts.
+    * **Educators & Students:** Building accurate history timelines.
+    * **Analysts:** Conducting background checks on public figures.
+
+  authors: ["Bernat Sampera"]
+  tags: ["research", "history", "biography", "education", "timeline", "OSINT"]
+  license: "MIT"
+  
+  assets:
+    icon: "https://raw.githubusercontent.com/xzz754233/event-deep-research/master/media/icon.jpeg"  
+    banner: "https://raw.githubusercontent.com/xzz754233/event-deep-research/master/media/banner.jpeg" 
+    screenshots: []
+
+pricing:
+  type: "free"
+
+interface:
+  input:
+    type: "object"
+    required: ["person_to_research"]
+    properties:
+      person_to_research:
+        type: "string"
+        title: "Subject Name"
+        description: "The historical figure or public personality you want to investigate."
+        default: "Albert Einstein"
+        x-ui-widget: "textarea" 
+
+  output:
+    type: "object"
+    description: "A structured JSON object containing the chronology of events, including dates, locations, and sources."
+
+runtime:
+  adapter:
+    type: "langgraph"
+    
+    entry_point: "src.graph:graph"
+    
+    environment_variables:
+      - "FIRECRAWL_API_KEY"  
+      - "TAVILY_API_KEY"     
+      - "OPENAI_API_KEY"    
+
+  injections:
+    llm_client: false
+    tools: []
+
+policies:
+  allow_internet_access: true
+  max_steps: 30
+  budget_limit: 5.0
