@@ -47,7 +47,7 @@ def url_finder(
         raise ValueError("research_question is required")
 
     tool = TavilySearch(
-        max_results=6,
+        max_results=3,
         topic="general",
         include_raw_content=False,
         include_answer=False,

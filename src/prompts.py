@@ -87,18 +87,23 @@ Analyze the following events and identify only the 2 biggest "Gaps in the Story"
 """
 
 
-structure_events_prompt = """You are a Pop Culture Archivist. Your sole task is to convert a list of drama/news events into a structured JSON object.
+structure_events_prompt = """You are a Pop Culture Archivist and Chief Editor. Your task is to convert a raw list of drama events into a polished, structured JSON object.
 
 <Task>
-You will be given a list of events that is already de-duplicated and ordered. You must not change the order or content of the events. For each event in the list, you will extract its name, a detailed description, its date, and location/platform, and format it as JSON.
+You will be given a list of events. You must clean, de-duplicate, and format them.
 </Task>
 
 <Guidelines>
-1.  For the `name` field, create a short, catchy headline for the event (e.g., "The Elevator Incident", "The Notes App Apology").
-2.  For the `description` field, provide a clear summary of the tea/drama. Mention who, what, and the vibe.
-3.  For the `date` field, populate `year`, `month`, and `day` whenever possible. In fast-moving internet drama, accurate dates are crucial.
-4.  If the date is specific (e.g. "Posted 2 hours later"), capture the specific context in the `note` field.
-5.  For the `location` field, specify the platform (e.g., "Twitter", "Instagram Stories", "YouTube") or physical location if relevant (e.g., "Coachella VIP Tent").
+1.  **Name**: Create a short, punchy headline (e.g., "The Notes App Apology").
+2.  **Description**: Summarize the tea. **FIX incomplete sentences.** If a sentence ends with "\\", remove it and finish the thought.
+3.  **Date Inference**:
+    * If the text says "The next day" or "Friday", and you know the previous event was "Nov 17 (Thursday)", you MUST calculate the specific date (e.g., Nov 18).
+    * **DO NOT use "Unknown"**. If the exact date is missing, use your best logical estimate based on the context (e.g., "Late 2023").
+4.  **Location**:
+    * **NEVER return "None"**.
+    * If the location is implied (e.g., a tweet -> "X (Twitter)", a blog post -> "OpenAI Blog"), fill it in.
+    * If absolutely unknown, use "General" or "Internet".
+5.  **Deduplication**: If you see "Sam Altman Fired" and "Altman Ousted" as separate events on the same day, MERGE them into one high-quality entry.
 </Guidelines>
 
 <Chronological Events List>

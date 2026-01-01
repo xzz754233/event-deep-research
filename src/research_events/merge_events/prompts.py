@@ -50,17 +50,14 @@ You must call exactly one of the provided tools. Do not respond with plain text.
 """
 
 
-MERGE_EVENTS_TEMPLATE = """You are a helpful assistant that will merge two lists of events: 
-the original events (which must always remain) and new events (which may contain extra details). 
-The new events should only be treated as additions if they provide relevant new information. 
-The final output must preserve the original events and seamlessly add the new ones if applicable.
+MERGE_EVENTS_TEMPLATE = """You are an expert Editor. Merge the 'New Events' into the 'Original Events' list.
 
-<Rules>
-- Always include the original events exactly, do not omit or alter them.
-- Add new events only if they are not duplicates, combining details if they overlap.
-- Format the final list as bullet points, one event per line (e.g., "- Event details.").
-- Keep the list clean, concise, and without commentary.
-</Rules>
+<Critical Rules>
+1. **DEDUPLICATE**: If an event in 'New Events' is already covered in 'Original Events' (even with slightly different wording), DO NOT add it again. Just merge any new specific details (like a specific time or quote) into the existing bullet point.
+2. **FIX BROKEN TEXT**: If a sentence ends abruptly or has escaping characters like "OpenAI\\", fix it or remove the garbage characters.
+3. **CHRONOLOGY**: Maintain strict time order.
+4. **FORMAT**: Output ONLY clean bullet points.
+</Critical Rules>
 
 <Events>
 Original events:
@@ -71,5 +68,5 @@ New events:
 </Events>
 
 <Output>
-Return only the merged list of events as bullet points, nothing else.
+Return only the merged, de-duplicated list of events as bullet points.
 </Output>"""

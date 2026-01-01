@@ -53,12 +53,12 @@ class Configuration(BaseModel):
         default=100000, description="Maximum content length to process"
     )
     max_tool_iterations: int = Field(
-        default=5, description="Maximum number of tool iterations"
+        default=2, description="Maximum number of tool iterations"
     )
 
     # CHARM OPTIMIZATION: Reduced from 20 to 10 to prevent 600s timeout
     max_chunks: int = Field(
-        default=5,
+        default=3,
         description="Maximum number of chunks to process for event detection",
     )
 

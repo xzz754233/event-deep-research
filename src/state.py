@@ -23,16 +23,12 @@ class ChronologyDate(BaseModel):
 class ChronologyEventInput(BaseModel):
     """Represents a single event, typically used for initial data extraction before an ID is assigned."""
 
-    name: str = Field(
-        description="A short, catchy title for the event (e.g., 'The Apology Video')."
-    )
-    description: str = Field(
-        description="A concise description of what happened, who said what, or the evidence found."
-    )
-    date: ChronologyDate = Field(..., description="The structured date of the event.")
-    location: str | None = Field(
-        None,
-        description="The platform (Twitter/X, Instagram, YouTube) or physical location where it happened.",
+    name: str = Field(description="A short, catchy title...")
+    description: str = Field(description="A concise description...")
+    date: ChronologyDate = Field(..., description="The structured date...")
+    location: str = Field(
+        default="",
+        description="The platform (Twitter/X) or physical location. If unknown, leave empty.",
     )
 
 
