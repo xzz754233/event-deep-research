@@ -1,7 +1,7 @@
 version: "0.4.1"
 persona:
   name: "Drama Detective"
-  version: "0.1.6"
+  version: "0.1.8"
   description: "Turns messy internet drama and scandals into clear, chronological timelines with receipts."
 
   full_description: |

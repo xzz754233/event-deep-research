@@ -1,7 +1,7 @@
 from typing import Type, TypeVar, Union
 from pydantic import BaseModel
 
-# Ensure we import the correct class definition
+# Ensure we import the correct class definition from state
 from src.state import CategoriesWithEvents
 
 T = TypeVar("T", bound=BaseModel)
@@ -27,7 +27,9 @@ def ensure_pydantic_model(data: Union[dict, T], model_class: Type[T]) -> T:
     if hasattr(data, "__dict__"):
         return model_class(**data.__dict__)
 
-    raise TypeError(f"Cannot convert {type(data)} to {model_class}")
+    # If it's a string or other type we can't handle, return empty
+    print(f"⚠️ Warning: Expected {model_class}, got {type(data)}. Returning empty.")
+    return model_class()
 
 
 def ensure_categories_with_events(
