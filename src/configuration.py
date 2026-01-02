@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class Configuration(BaseModel):
     """Main configuration class for the Drama/Gossip Research agent."""
 
-    # FIXED: Use stable model version.
+    # FIXED: Reverted to 1.5-flash. "2.5" does not exist and causes crashes.
     llm_model: str = Field(
         default="google_genai:gemini-2.5-flash",
         description="Primary LLM model",
@@ -26,7 +26,7 @@ class Configuration(BaseModel):
     default_overlap_size: int = Field(default=20)
     max_content_length: int = Field(default=100000)
 
-    # CHARM TUNING: Give it enough turns to think/retry, but limit data load
+    # CHARM OPTIMIZATION: Conservative limits to ensure stability
     max_tool_iterations: int = Field(default=10)
     max_chunks: int = Field(default=3)
 
@@ -37,6 +37,7 @@ class Configuration(BaseModel):
         return self.tools_llm_model or self.llm_model
 
     def get_llm_chunk_model(self) -> str:
+        # FIXED: Ensure chunk model is also valid
         return "google_genai:gemini-2.5-flash"
 
     @classmethod

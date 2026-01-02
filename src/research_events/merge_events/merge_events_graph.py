@@ -1,14 +1,16 @@
+import json
 from typing import List, Literal, TypedDict
 
 from langchain_core.tools import tool
 from langgraph.graph import START, StateGraph
 from langgraph.graph.state import Command, RunnableConfig
-from langgraph.pregel.main import asyncio
+
+# FIXED: Use standard asyncio, NOT langgraph's internal one
+import asyncio
 from pydantic import BaseModel, Field
 from src.configuration import Configuration
 from src.llm_service import create_llm_with_tools
 
-# CHANGED: Import the new graph factory function
 from src.research_events.chunk_graph import create_drama_event_graph
 from src.research_events.merge_events.prompts import (
     EXTRACT_AND_CATEGORIZE_PROMPT,
@@ -21,61 +23,46 @@ from src.url_crawler.utils import chunk_text_by_tokens
 from src.utils import get_langfuse_handler
 
 
-# CHANGED: Updated fields to match the Drama/Gossip domain
 class RelevantEventsCategorized(BaseModel):
     """The chunk contains relevant drama/scandal events that have been categorized."""
 
-    context: str = Field(
-        description="Bullet points about background info, previous relationships, or the origin of the beef."
-    )
-    conflict: str = Field(
-        description="Bullet points about the main incident, accusations, leaks, or the scandal itself."
-    )
-    reaction: str = Field(
-        description="Bullet points about public responses, PR statements, tweets, lawsuits, or 'receipts'."
-    )
-    outcome: str = Field(
-        description="Bullet points about current status, cancellations, career impact, or final resolution."
-    )
+    context: str = Field(description="Background info, previous relationships, origin.")
+    conflict: str = Field(description="The main incident, accusations, leaks.")
+    reaction: str = Field(description="Public responses, tweets, lawsuits.")
+    outcome: str = Field(description="Current status, cancellations, resolution.")
 
 
 class IrrelevantChunk(BaseModel):
-    """The chunk contains NO drama/scandal events relevant to the research question."""
+    """The chunk contains NO drama/scandal events."""
 
 
 class InputMergeEventsState(TypedDict):
-    """The complete state for the enhanced event merging sub-graph."""
-
     existing_events: CategoriesWithEvents
     extracted_events: str
     research_question: str
 
 
 class MergeEventsState(InputMergeEventsState):
-    text_chunks: List[str]  # token-based chunks
-    categorized_chunks: List[CategoriesWithEvents]  # results per chunk
+    text_chunks: List[str]
+    categorized_chunks: List[CategoriesWithEvents]
     extracted_events_categorized: CategoriesWithEvents
 
 
 class OutputMergeEventsState(TypedDict):
-    existing_events: CategoriesWithEvents  # includes the existing events + the events from the new events
+    existing_events: CategoriesWithEvents
 
 
 async def split_events(
     state: MergeEventsState,
 ) -> Command[Literal["filter_chunks", "__end__"]]:
-    """Use token-based chunking from URL crawler and filter for drama events"""
+    """Use token-based chunking."""
     extracted_events = state.get("extracted_events", "")
-
     if not extracted_events.strip():
-        # No content to process
         return Command(
-            goto="__end__",
-            update={"text_chunks": [], "categorized_chunks": []},
+            goto="__end__", update={"text_chunks": [], "categorized_chunks": []}
         )
 
     chunks = await chunk_text_by_tokens(extracted_events)
-
     return Command(
         goto="filter_chunks",
         update={"text_chunks": chunks[0:20], "categorized_chunks": []},
@@ -85,91 +72,99 @@ async def split_events(
 async def filter_chunks(
     state: MergeEventsState, config: RunnableConfig
 ) -> Command[Literal["extract_and_categorize_chunk", "__end__"]]:
-    """Filter chunks to only process those containing relevant drama events"""
+    """Filter chunks using the drama detection graph."""
     chunks = state.get("text_chunks", [])
-
     if not chunks:
-        return Command(
-            goto="__end__",
-        )
+        return Command(goto="__end__")
 
-    # CHANGED: Use the drama event graph
     chunk_graph = create_drama_event_graph()
-
     configurable = Configuration.from_runnable_config(config)
-    if len(chunks) > configurable.max_chunks:
-        # To avoid recursion issues, set max chunks
-        chunks = chunks[: configurable.max_chunks]
 
-    # Process each chunk through the drama event detection graph
+    # Slice chunks to max limit
+    processing_chunks = (
+        chunks[: configurable.max_chunks]
+        if len(chunks) > configurable.max_chunks
+        else chunks
+    )
+
     relevant_chunks = []
-    for chunk in chunks:
-        chunk_result = await chunk_graph.ainvoke({"text": chunk}, config)
-
-        # Check if any chunk contains drama events
-        # CHANGED: Check for 'contains_drama_event' instead of 'contains_biographic_event'
-        has_events = any(
-            result.contains_drama_event for result in chunk_result["results"].values()
-        )
-        print(f"contains_drama_event: {has_events}")
-
-        if has_events:
-            relevant_chunks.append(chunk)
+    # Process sequentially to avoid event loop overload
+    for chunk in processing_chunks:
+        try:
+            chunk_result = await chunk_graph.ainvoke({"text": chunk}, config)
+            has_events = any(
+                result.contains_drama_event
+                for result in chunk_result["results"].values()
+            )
+            if has_events:
+                relevant_chunks.append(chunk)
+        except Exception as e:
+            print(f"Error filtering chunk: {e}")
 
     if not relevant_chunks:
-        # No relevant chunks found
         return Command(goto="__end__")
 
     return Command(
         goto="extract_and_categorize_chunk",
-        update={"text_chunks": chunks, "categorized_chunks": []},
+        update={"text_chunks": relevant_chunks, "categorized_chunks": []},
     )
 
 
 async def extract_and_categorize_chunk(
     state: MergeEventsState, config: RunnableConfig
 ) -> Command[Literal["extract_and_categorize_chunk", "merge_categorizations"]]:
-    """Combined extraction and categorization"""
+    """Extract and categorize events from a chunk."""
     chunks = state.get("text_chunks", [])
     categorized_chunks = state.get("categorized_chunks", [])
 
     if len(categorized_chunks) >= len(chunks):
-        # all categorized_chunks done → move to merge
         return Command(goto="merge_categorizations")
 
-    # take next chunk
     chunk = chunks[len(categorized_chunks)]
-    research_question = state.get("research_question", "")
-
-    prompt = EXTRACT_AND_CATEGORIZE_PROMPT.format(
-        # research_question=research_question,
-        text_chunk=chunk
-    )
+    prompt = EXTRACT_AND_CATEGORIZE_PROMPT.format(text_chunk=chunk)
 
     tools = [tool(RelevantEventsCategorized), tool(IrrelevantChunk)]
     model = create_llm_with_tools(tools=tools, config=config)
-    response = await model.ainvoke(prompt)
 
-    # Parse response
-    if (
-        response.tool_calls
-        and response.tool_calls[0]["name"] == "RelevantEventsCategorized"
-    ):
-        categorized_data = response.tool_calls[0]["args"]
-        # Convert any list values to strings
-        categorized_data = {
-            k: "\n".join(v) if isinstance(v, list) else v
-            for k, v in categorized_data.items()
-        }
-        categorized = CategoriesWithEvents(**categorized_data)
-    else:
-        # CHANGED: Initialize with new empty fields
+    try:
+        response = await model.ainvoke(prompt)
+
+        # DEFENSIVE CODING: Check if tool calls exist
+        if response.tool_calls:
+            tool_call = response.tool_calls[0]
+            args = tool_call["args"]
+
+            # GEMINI FIX: Parse JSON string if needed
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except:
+                    args = {}
+
+            if tool_call["name"] == "RelevantEventsCategorized":
+                # Convert list values to strings if necessary
+                clean_args = {
+                    k: ("\n".join(v) if isinstance(v, list) else v)
+                    for k, v in args.items()
+                }
+                categorized = CategoriesWithEvents(**clean_args)
+            else:
+                categorized = CategoriesWithEvents(
+                    context="", conflict="", reaction="", outcome=""
+                )
+        else:
+            categorized = CategoriesWithEvents(
+                context="", conflict="", reaction="", outcome=""
+            )
+
+    except Exception as e:
+        print(f"Error categorizing chunk: {e}")
         categorized = CategoriesWithEvents(
             context="", conflict="", reaction="", outcome=""
         )
 
     return Command(
-        goto="extract_and_categorize_chunk",  # loop until all chunks processed
+        goto="extract_and_categorize_chunk",
         update={"categorized_chunks": categorized_chunks + [categorized]},
     )
 
@@ -177,11 +172,9 @@ async def extract_and_categorize_chunk(
 async def merge_categorizations(
     state: MergeEventsState,
 ) -> Command[Literal["combine_new_and_original_events"]]:
-    """Merge all categorized chunks into a single CategoriesWithEvents"""
+    """Merge all results."""
     results = state.get("categorized_chunks", [])
-
     merged = EventService.merge_categorized_events(results)
-
     return Command(
         goto="combine_new_and_original_events",
         update={"extracted_events_categorized": merged},
@@ -191,20 +184,12 @@ async def merge_categorizations(
 async def combine_new_and_original_events(
     state: MergeEventsState, config: RunnableConfig
 ) -> Command:
-    """Merge original and new events for each category using an LLM."""
+    """Combine with LLM."""
     print("Combining new and original events...")
 
-    # CHANGED: Updated default empty values
-    existing_events_raw = state.get(
-        "existing_events",
-        CategoriesWithEvents(context="", conflict="", reaction="", outcome=""),
-    )
-    new_events_raw = state.get(
-        "extracted_events_categorized",
-        CategoriesWithEvents(context="", conflict="", reaction="", outcome=""),
-    )
+    existing_events_raw = state.get("existing_events")
+    new_events_raw = state.get("extracted_events_categorized")
 
-    # Convert to proper Pydantic models if they're dicts
     existing_events = ensure_categories_with_events(existing_events_raw)
     new_events = ensure_categories_with_events(new_events_raw)
 
@@ -212,19 +197,22 @@ async def combine_new_and_original_events(
         getattr(new_events, cat, "").strip()
         for cat in CategoriesWithEvents.model_fields.keys()
     ):
-        print("No new events found. Keeping existing events.")
         return Command(goto="__end__", update={"existing_events": existing_events})
 
     merge_tasks = []
     categories = CategoriesWithEvents.model_fields.keys()
 
+    # Use regular structured model
+    from src.llm_service import create_llm_structured_model
+
+    llm = create_llm_structured_model(config=config)
+
     for category in categories:
-        # Now you can safely use getattr since they're guaranteed to be Pydantic models
         existing_text = getattr(existing_events, category, "").strip()
         new_text = getattr(new_events, category, "").strip()
 
         if not (existing_text or new_text):
-            continue  # nothing to merge in this category
+            continue
 
         existing_display = existing_text if existing_text else "No events"
         new_display = new_text if new_text else "No events"
@@ -232,23 +220,14 @@ async def combine_new_and_original_events(
         prompt = MERGE_EVENTS_TEMPLATE.format(
             original=existing_display, new=new_display
         )
-
-        # Use regular structured model for merging (not tools model)
-        from src.llm_service import create_llm_structured_model
-
-        merge_tasks.append(
-            (category, create_llm_structured_model(config=config).ainvoke(prompt))
-        )
+        merge_tasks.append((category, llm.ainvoke(prompt)))
 
     final_merged_dict = {}
     if merge_tasks:
-        categories, tasks = zip(*merge_tasks)
+        cats, tasks = zip(*merge_tasks)
         responses = await asyncio.gather(*tasks)
-        final_merged_dict = {
-            cat: resp.content for cat, resp in zip(categories, responses)
-        }
+        final_merged_dict = {cat: resp.content for cat, resp in zip(cats, responses)}
 
-    # Ensure all categories are included
     for category in CategoriesWithEvents.model_fields.keys():
         if category not in final_merged_dict:
             final_merged_dict[category] = getattr(existing_events, category, "")
@@ -260,7 +239,6 @@ async def combine_new_and_original_events(
 merge_events_graph_builder = StateGraph(
     MergeEventsState, input_schema=InputMergeEventsState, config_schema=Configuration
 )
-
 merge_events_graph_builder.add_node("split_events", split_events)
 merge_events_graph_builder.add_node("filter_chunks", filter_chunks)
 merge_events_graph_builder.add_node(
@@ -270,13 +248,8 @@ merge_events_graph_builder.add_node("merge_categorizations", merge_categorizatio
 merge_events_graph_builder.add_node(
     "combine_new_and_original_events", combine_new_and_original_events
 )
-
 merge_events_graph_builder.add_edge(START, "split_events")
 
-
 merge_events_app = merge_events_graph_builder.compile().with_config(
-    {
-        "callbacks": [get_langfuse_handler()],
-        "recursionLimit": 200,
-    },
+    {"callbacks": [get_langfuse_handler()], "recursionLimit": 200}
 )

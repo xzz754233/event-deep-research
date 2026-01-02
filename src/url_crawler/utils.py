@@ -2,7 +2,6 @@ import asyncio
 import os
 import re
 from typing import List
-
 import aiohttp
 import tiktoken
 
@@ -12,11 +11,7 @@ FIRECRAWL_API_URL = (
 
 
 async def url_crawl(url: str) -> str:
-    """Crawls a URL and returns its content. For this example, returns dummy text."""
-    # print(f"--- FAKE CRAWLING: {url} ---")
-    # if "wikipedia" in url:
-    #     return "Henry Miller was an American novelist, short story writer and essayist. He was born in Yorkville, NYC on December 26, 1891. He moved to Paris in 1930. He wrote tropic of cancer, part of his series of novels about his life."
-
+    """Crawls a URL and returns its content."""
     content = await scrape_page_content(url)
     if content is None:
         return ""
@@ -24,11 +19,9 @@ async def url_crawl(url: str) -> str:
 
 
 async def scrape_page_content(url):
-    """Scrapes URL using Firecrawl API and returns Markdown content."""
+    """Scrapes URL using Firecrawl API."""
     try:
         headers = {"Content-Type": "application/json"}
-
-        # Add API key if available
         api_key = os.getenv("FIRECRAWL_API_KEY")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -53,36 +46,42 @@ async def scrape_page_content(url):
 
 
 def remove_markdown_links(markdown_text):
-    """Removes Markdown links, keeping only display text."""
     return re.sub(r"\[(.*?)\]\(.*?\)", r"\1", markdown_text)
 
 
-# Global tokenizer cache to avoid repeated loading
+# Global tokenizer cache
 _tokenizer = None
 
 
 def get_tokenizer():
-    """Get the tiktoken tokenizer, loading it lazily."""
     global _tokenizer
     if _tokenizer is None:
         _tokenizer = tiktoken.get_encoding("cl100k_base")
     return _tokenizer
 
 
+# FIXED: Helper function to run encoding in a thread
+def _encode_text(text: str):
+    enc = get_tokenizer()
+    return enc.encode(text)
+
+
 async def chunk_text_by_tokens(
     text: str, chunk_size: int = 1000, overlap_size: int = 20
 ) -> List[str]:
-    """Splits text into token-based, overlapping chunks."""
+    """Splits text into token-based chunks asynchronously."""
     if not text:
         return []
 
-    # Load tokenizer in a thread to avoid blocking
-    encoding = await asyncio.to_thread(get_tokenizer)
-    tokens = encoding.encode(text)
-    print("--- TOKENS ---")
-    print(len(tokens))
-    print("--- TOKENS ---")
+    # FIXED: Run the CPU-bound encoding in a separate thread to avoid blocking the event loop
+    tokens = await asyncio.to_thread(_encode_text, text)
+
+    print(f"--- TOKENS: {len(tokens)} ---")
+
     chunks = []
+    # Decode is fast enough to keep here, but encoding is the bottleneck
+    encoding = get_tokenizer()
+
     start_index = 0
     while start_index < len(tokens):
         end_index = start_index + chunk_size
@@ -90,18 +89,12 @@ async def chunk_text_by_tokens(
         chunks.append(encoding.decode(chunk_tokens))
         start_index += chunk_size - overlap_size
 
-    print(f"""<delete>
-    CHUNKED TEXT ---
-    Chunks:{len(chunks)}
-    Tokens: {len(tokens)}
-    Text: {len(text)}
-    ---
-    """)
+    print(f"--- Generated {len(chunks)} chunks ---")
     return chunks
 
 
 async def count_tokens(messages: List[str]) -> int:
-    """Counts the total tokens in a list of messages."""
-    # Load tokenizer in a thread to avoid blocking
-    encoding = await asyncio.to_thread(get_tokenizer)
-    return sum(len(encoding.encode(msg)) for msg in messages)
+    """Counts tokens asynchronously."""
+    combined = "".join(messages)
+    tokens = await asyncio.to_thread(_encode_text, combined)
+    return len(tokens)
