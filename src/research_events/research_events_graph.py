@@ -13,6 +13,9 @@ from src.state import CategoriesWithEvents
 from src.url_crawler.url_krawler_graph import url_crawler_app
 from src.utils import get_langfuse_handler
 
+# IMPORT FIX: Ensure we use the helper
+from src.research_events.merge_events.utils import ensure_categories_with_events
+
 
 class InputResearchEventsState(TypedDict):
     research_question: str
@@ -22,7 +25,6 @@ class InputResearchEventsState(TypedDict):
 
 class ResearchEventsState(InputResearchEventsState):
     urls: list[str]
-    # Add this temporary field
     extracted_events: str
 
 
@@ -32,7 +34,6 @@ class OutputResearchEventsState(TypedDict):
 
 
 class BestUrls(BaseModel):
-    # SPEED HACK: Only ask for 1 URL
     selected_urls: list[str] = Field(
         description="A list containing ONLY the single best URL."
     )
@@ -49,7 +50,6 @@ def url_finder(
     if not research_question:
         raise ValueError("research_question is required")
 
-    # SPEED HACK: Reduce search results
     tool = TavilySearch(
         max_results=3,
         topic="general",
@@ -61,7 +61,6 @@ def url_finder(
     result = tool.invoke({"query": research_question})
     urls = [result["url"] for result in result["results"]]
 
-    # SPEED HACK: Prompt for single best URL
     prompt = """
         From the results below, select the ONE SINGLE best URL that provides a comprehensive timeline 
         of the drama/scandal. Prefer Wikipedia, BBC, or major news recaps.
@@ -90,7 +89,6 @@ def updateUrlList(
 ) -> tuple[list[str], list[str]]:
     urls = state.get("urls", [])
     used_domains = state.get("used_domains", [])
-
     return URLService.update_url_list(urls, used_domains)
 
 
@@ -103,7 +101,6 @@ def should_process_url_router(
     if urls and len(urls) > 0:
         domain = URLService.extract_domain(urls[0])
         if domain in used_domains:
-            # remove first url
             remaining_urls = urls[1:]
             return Command(
                 goto="should_process_url_router",
@@ -114,29 +111,25 @@ def should_process_url_router(
         return Command(goto="crawl_url")
     else:
         print("No URLs remaining. Routing to __end__.")
-        # Otherwise, end the graph execution
-        return Command(
-            goto=END,
-        )
+        return Command(goto=END)
 
 
 async def crawl_url(
     state: ResearchEventsState,
 ) -> Command[Literal["merge_events_and_update"]]:
-    """Crawls the next URL and updates the temporary state with new events."""
+    """Crawls the next URL."""
     urls = state["urls"]
-    url_to_process = urls[0]  # Always process the first one
+    url_to_process = urls[0]
     research_question = state.get("research_question", "")
 
     if not research_question:
         raise ValueError("research_question is required for url crawling")
 
-    # Invoke the crawler subgraph
     result = await url_crawler_app.ainvoke(
         {"url": url_to_process, "research_question": research_question}
     )
     extracted_events = result["extracted_events"]
-    # Go to the merge node, updating the state with the extracted events
+
     return Command(
         goto="merge_events_and_update",
         update={"extracted_events": extracted_events},
@@ -146,30 +139,45 @@ async def crawl_url(
 async def merge_events_and_update(
     state: ResearchEventsState,
 ) -> Command[Literal["should_process_url_router"]]:
-    """Merges new events, removes the processed URL, and loops back to the router."""
-    existing_events = state.get("existing_events", CategoriesWithEvents())
+    """Merges new events."""
+    # Normalize state
+    existing_events_raw = state.get("existing_events")
+    existing_events = ensure_categories_with_events(existing_events_raw)
+
     extracted_events = state.get("extracted_events", "")
     research_question = state.get("research_question", "")
 
-    # Invoke the merge subgraph
-    result = await merge_events_app.ainvoke(
-        {
-            "existing_events": existing_events,
-            "extracted_events": extracted_events,
-            "research_question": research_question,
-        }
-    )
+    try:
+        # Invoke the merge subgraph
+        result = await merge_events_app.ainvoke(
+            {
+                "existing_events": existing_events,
+                "extracted_events": extracted_events,
+                "research_question": research_question,
+            }
+        )
+
+        # DEFENSIVE CODING: Check output type
+        if isinstance(result, dict) and "existing_events" in result:
+            new_existing_events = result["existing_events"]
+        else:
+            print(
+                f"⚠️ Merge subgraph returned unexpected format: {type(result)}. Retaining old events."
+            )
+            new_existing_events = existing_events
+
+    except Exception as e:
+        print(f"❌ Error in merge_events_app: {e}. Retaining old events.")
+        new_existing_events = existing_events
 
     remaining_urls, used_domains = updateUrlList(state)
 
-    # Remaining URLs after removal
     return Command(
         goto="should_process_url_router",
         update={
-            "existing_events": result["existing_events"],
+            "existing_events": new_existing_events,
             "urls": remaining_urls,
             "used_domains": used_domains,
-            # "extracted_events": "",  # Clear the temporary state
         },
     )
 
@@ -181,15 +189,12 @@ research_events_builder = StateGraph(
     config_schema=Configuration,
 )
 
-# Add all the nodes to the graph
 research_events_builder.add_node("url_finder", url_finder)
 research_events_builder.add_node("should_process_url_router", should_process_url_router)
 research_events_builder.add_node("crawl_url", crawl_url)
 research_events_builder.add_node("merge_events_and_update", merge_events_and_update)
 
-# Set the entry point
 research_events_builder.add_edge(START, "url_finder")
-
 
 research_events_app = research_events_builder.compile().with_config(
     {"callbacks": [get_langfuse_handler()]}

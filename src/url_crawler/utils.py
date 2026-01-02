@@ -15,6 +15,14 @@ async def url_crawl(url: str) -> str:
     content = await scrape_page_content(url)
     if content is None:
         return ""
+
+    # --- 唯一保留的必要優化：物理截斷 ---
+    # 不要讓 40 萬字的文章進入後面的處理流程，直接在源頭砍斷。
+    # 20,000 字元約等於 4000-5000 tokens，這對一篇新聞報導來說綽綽有餘。
+    if len(content) > 20000:
+        print(f"⚠️ Content too long ({len(content)} chars). Truncating to 20k.")
+        content = content[:20000]
+
     return remove_markdown_links(content)
 
 
@@ -60,28 +68,21 @@ def get_tokenizer():
     return _tokenizer
 
 
-# FIXED: Helper function to run encoding in a thread
-def _encode_text(text: str):
-    enc = get_tokenizer()
-    return enc.encode(text)
-
-
+# FIXED: 完全移除多線程 (asyncio.to_thread)，回到最原本的同步寫法
 async def chunk_text_by_tokens(
     text: str, chunk_size: int = 1000, overlap_size: int = 20
 ) -> List[str]:
-    """Splits text into token-based chunks asynchronously."""
+    """Splits text into token-based chunks synchronously."""
     if not text:
         return []
 
-    # FIXED: Run the CPU-bound encoding in a separate thread to avoid blocking the event loop
-    tokens = await asyncio.to_thread(_encode_text, text)
+    # 直接計算，雖然會卡住 Main Loop 0.01秒，但絕對不會報錯
+    encoding = get_tokenizer()
+    tokens = encoding.encode(text)
 
     print(f"--- TOKENS: {len(tokens)} ---")
 
     chunks = []
-    # Decode is fast enough to keep here, but encoding is the bottleneck
-    encoding = get_tokenizer()
-
     start_index = 0
     while start_index < len(tokens):
         end_index = start_index + chunk_size
@@ -94,7 +95,6 @@ async def chunk_text_by_tokens(
 
 
 async def count_tokens(messages: List[str]) -> int:
-    """Counts tokens asynchronously."""
+    encoding = get_tokenizer()
     combined = "".join(messages)
-    tokens = await asyncio.to_thread(_encode_text, combined)
-    return len(tokens)
+    return len(encoding.encode(combined))
