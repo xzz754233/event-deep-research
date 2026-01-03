@@ -1,8 +1,8 @@
 version: "0.4.1"
 persona:
   name: "Drama Detective"
-  version: "0.2.0"
-  description: "Turns messy internet drama and scandals into clear, chronological timelines with receipts."
+  version: "0.2.1"
+  description: "Turns messy internet drama and incidents into clear, chronological timelines with receipts."
 
   full_description: |
 
@@ -23,7 +23,7 @@ persona:
     #### What you get
 
     A structured, chronological timeline broken down into 4 parts:
-    1.  **The Context:** How it all started (the "calm before the storm").
+    1.  **The Context:** How it all started.
     2.  **The Conflict:** The explosion, accusations, and leaked details.
     3.  **The Reaction:** Who took sides, PR statements, and public fallout.
     4.  **The Outcome:** Where are they now? Who got cancelled?
